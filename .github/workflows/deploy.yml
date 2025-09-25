@@ -1,0 +1,114 @@
+name: Deploy Complete TTS System
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+    - name: 🔥 Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: 🐳 Setup Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: 🔐 Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: 🏷️ Generate Tags
+      id: meta
+      run: |
+        echo "timestamp=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+        echo "repo_owner=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+        
+    - name: 🎭 Build Kokkoro Image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./runpod
+        file: ./runpod/Dockerfile.kokkoro
+        push: true
+        tags: |
+          ghcr.io/${{ steps.meta.outputs.repo_owner }}/tts-kokkoro:latest
+          ghcr.io/${{ steps.meta.outputs.repo_owner }}/tts-kokkoro:${{ steps.meta.outputs.timestamp }}
+        platforms: linux/amd64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: 💬 Build Chatterbox Image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./runpod
+        file: ./runpod/Dockerfile.chatterbox
+        push: true
+        tags: |
+          ghcr.io/${{ steps.meta.outputs.repo_owner }}/tts-chatterbox:latest
+          ghcr.io/${{ steps.meta.outputs.repo_owner }}/tts-chatterbox:${{ steps.meta.outputs.timestamp }}
+        platforms: linux/amd64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: 🗣️ Build Coqui Image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./runpod
+        file: ./runpod/Dockerfile.coqui
+        push: true
+        tags: |
+          ghcr.io/${{ steps.meta.outputs.repo_owner }}/tts-coqui:latest
+          ghcr.io/${{ steps.meta.outputs.repo_owner }}/tts-coqui:${{ steps.meta.outputs.timestamp }}
+        platforms: linux/amd64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: 🐍 Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: 📦 Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests PyJWT cryptography
+        
+    - name: 🚀 Deploy to RunPod
+      env:
+        RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        DOCKER_USERNAME: ${{ steps.meta.outputs.repo_owner }}
+        IMAGE_TAG: ${{ steps.meta.outputs.timestamp }}
+        DOCKER_REGISTRY: ghcr.io
+      run: |
+        python scripts/deploy.py
+        
+    - name: 🧪 Test Endpoints
+      env:
+        RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+      run: |
+        python scripts/test_client.py
+        
+    - name: 📊 Generate Report
+      run: |
+        echo "## 🎉 TTS System Deployed Successfully!" >> $GITHUB_STEP_SUMMARY
+        echo "### 🐳 Docker Images:" >> $GITHUB_STEP_SUMMARY
+        echo "- **Kokkoro**: \`ghcr.io/${{ steps.meta.outputs.repo_owner }}/tts-kokkoro:${{ steps.meta.outputs.timestamp }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Chatterbox**: \`ghcr.io/${{ steps.meta.outputs.repo_owner }}/tts-chatterbox:${{ steps.meta.outputs.timestamp }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Coqui**: \`ghcr.io/${{ steps.meta.outputs.repo_owner }}/tts-coqui:${{ steps.meta.outputs.timestamp }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "### 🚀 RunPod Endpoints:" >> $GITHUB_STEP_SUMMARY
+        if [ -f deployment_results.json ]; then
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          cat deployment_results.json >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+        fi
